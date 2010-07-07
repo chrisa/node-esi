@@ -13,10 +13,9 @@ function server_cb(request, response) {
     
     proxy_request.addListener('response', function(proxy_response) {
 	if (proxy_response.headers['content-type'] && proxy_response.headers['content-type'].indexOf('text/html') == 0) {
-	    sys.debug("doing ESI request");
 
 	    // text/html - doing ESI processing
-	    var context = esi_context.createContext(response);
+	    var context = esi_context.createContext(response, proxy_response);
 	    
 	    proxy_response.addListener('data', function(chunk) {
 		context.chunk(chunk);
@@ -24,14 +23,8 @@ function server_cb(request, response) {
 	    proxy_response.addListener('end', function() {
 		context.end();
 	    });
-
-	    // pass through headers and status though, even with ESI processing
-	    // XXX may end up changing cache-control headers post-ESI.
-	    response.writeHead(proxy_response.statusCode, proxy_response.headers);
 	}
 	else {
-	    sys.debug("doing passthrough request");
-
 	    // other - passthrough
 	    proxy_response.addListener('data', function(chunk) {
 		response.write(chunk, 'binary');

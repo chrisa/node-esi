@@ -5,13 +5,14 @@ var sys = require('sys');
 var url  = require('url');
 var http = require('http');
 
-esi_context.createContext = function (response) {
-    return new EsiContext(response);
+esi_context.createContext = function (response, proxy_response) {
+    return new EsiContext(response, proxy_response);
 }
 
-function EsiContext (response) {
+function EsiContext (response, proxy_response) {
     this.subreqs = [];
     this.response = response;
+    this.proxy_response = proxy_response;
     this.all_subreqs_started = false;
     this.subreqs_outstanding = 0;
     this.main_req = "";
@@ -43,17 +44,8 @@ function EsiContext (response) {
 		var request = client.request('GET', src.pathname,
 					     {'host': src.host});
 		request.end();
-		
-		request.addListener('response', function (response) {
-		    response.setEncoding('utf8');
-		    response.addListener('data', function (chunk) {
-			subreq.addChunk(chunk);
-		    });
-		    response.addListener('end', function () {
-			context.subreqs_outstanding--;
-			context.subreq_completed();
-		    });
-		});
+
+		context.setup_response(request, subreq);
 		context.subreqs_outstanding++;
  	    }
 	    context.all_subreqs_started = true;
@@ -66,6 +58,21 @@ function EsiContext (response) {
 
     this.parser = new htmlparser.Parser(handler);
 }
+
+// this is here to let the listeners close over the right subreq.
+EsiContext.prototype.setup_response = function (request, subreq) {
+    var our_subreq = subreq;
+    var context = this;
+    request.addListener('response', function (response) {
+	response.addListener('data', function (chunk) {
+	    our_subreq.addChunk(chunk);
+	});
+	response.addListener('end', function () {
+	    context.subreqs_outstanding--;
+	    context.subreq_completed();
+	});
+    });
+};
 
 EsiContext.prototype.chunk = function (chunk) {
     // received a chunk of main request data - pass to parser
@@ -82,33 +89,38 @@ EsiContext.prototype.subreq_completed = function () {
 
     // if we're still starting subreqs at the point one completes, wait
     if (this.all_subreqs_started == false) {
-	sys.debug("still starting subrequests");
 	return;
     }
     
     // if we still have subrequests outstanding, wait
     if (this.subreqs_outstanding > 0) {
-	sys.debug("still " + this.subreqs_outstanding + " subrequests outstanding");
 	return;
     }
 
-    sys.debug("completing ESI request");
-
     // all subreqs are in, we should have the replacement docs and
     // their offsets in the main docs ready to go
+    
+    // compute new content-length
+    var new_length = this.main_req.length;
+    for (i in this.subreqs) {
+	new_length += this.subreqs[i].replacement.length;
+    }
+    this.proxy_response.headers['content-length'] = new_length;
+    this.proxy_response.headers['connection'] = 'close';
+    this.response.writeHead(this.proxy_response.statusCode, this.proxy_response.headers);
 
+    // output the main request interleaved with subrequests
     var sorted_subreqs = this.subreqs.sort(function(a, b) { a.start - b.start });
+
     var prev = 0;
     for (i in sorted_subreqs) {
 	var subreq = sorted_subreqs[i];
-	
-	this.response.write(this.main_req.substring(prev, subreq.start - 1));
-	this.response.write(subreq.replacement);
-	
+	this.response.write(this.main_req.substring(prev, subreq.start - 1), 'binary');
+	this.response.write(subreq.replacement, 'binary');
 	prev = subreq.end + 1;
     }
 
-    this.response.write(this.main_req.substring(prev));
+    this.response.write(this.main_req.substring(prev), 'binary');
     this.response.end();
 };
 
