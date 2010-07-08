@@ -149,14 +149,15 @@ EsiContext.prototype.setup_response = function (request, subreq) {
     var context = this;
 
     // set up a timeout for this subrequest
+    var timeout = 500;
     setTimeout(function () {
-	our_subreq.addChunk('<div class="subreq" id="' + our_subreq.url + "\"><p>failed to load, trying again...</p></div>\n");
+	our_subreq.addChunk('<div class="subreq" id="' + our_subreq.url + "\"><p>failed to load after " + timeout + "ms, trying again...<img src=\"/_esi/spinner.gif\"></p></div>\n");
 	context.subreqs_outstanding--;
 	context.subreq_completed();
 	request.removeAllListeners('response');
 	request.removeAllListeners('data');
 	request.removeAllListeners('end');
-    }, 2500); // XXX 2.5s per subreq
+    }, 500);
 
     request.addListener('response', function (response) {
 	// choose between inlining this response, or inlining our
@@ -164,7 +165,7 @@ EsiContext.prototype.setup_response = function (request, subreq) {
 	if (response.statusCode >= 400) {
 
 	    // client-side try-again 
-	    our_subreq.addChunk('<div class="subreq" id="' + our_subreq.url + "\"><p>failed to load, trying again...</p></div>\n");
+	    our_subreq.addChunk('<div class="subreq" id="' + our_subreq.url + "\"><p>failed to load after error, trying again...</p></div>\n");
 	    context.subreqs_outstanding--;
 	    context.subreq_completed();
 	}

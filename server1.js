@@ -7,7 +7,7 @@ function server_cb(request, response) {
     setTimeout(function () {
 	sys.puts("server1 responding");
 	response.writeHead(200, { 'content-type': 'text/html' });
-	response.write("<p>server1 response</p>\n", 'ascii');
+	response.write("<p>server1 response, after 5000ms</p>\n", 'ascii');
 	response.end();
     }, 5000);
 }
