@@ -98,6 +98,7 @@ function EsiContext (response, proxy_response) {
     this.all_subreqs_started = false;
     this.subreqs_outstanding = 0;
     this.main_req = "";
+    this.response_sent = false;
     
     // make these available to the Handler callback
     var subreqs = this.subreqs;
@@ -117,7 +118,6 @@ function EsiContext (response, proxy_response) {
 
 		// compose a request from the esi:include tag
 		sys.debug("ESI subrequest: " + include.attribs['src']);
-
 		var src = url.parse(include.attribs['src']);
 		var client = http.createClient(src.port, src.hostname);
 		var request = client.request('GET', src.pathname,
@@ -206,13 +206,22 @@ EsiContext.prototype.subreq_completed = function () {
 	return;
     }
 
+    // if the response has already been sent, do nothing
+    if (this.response_sent == true) {
+	return;
+    }
+
     // all subreqs are in, we should have the replacement docs and
     // their offsets in the main docs ready to go
-    
+
     // compute new content-length
     var new_length = this.main_req.length;
     for (i in this.subreqs) {
+	// add replacement length
 	new_length += this.subreqs[i].replacement.length;
+
+	// subtract old tag length
+	new_length -= ((this.subreqs[i].end - this.subreqs[i].start) + 2);
     }
     this.proxy_response.headers['content-length'] = new_length;
     this.proxy_response.headers['connection'] = 'close';
@@ -231,6 +240,8 @@ EsiContext.prototype.subreq_completed = function () {
 
     this.response.write(this.main_req.substring(prev), 'binary');
     this.response.end();
+
+    this.response_sent = true;
 };
 
 // --- EsiSubrequest 
