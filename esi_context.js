@@ -1,9 +1,10 @@
 var esi_context = exports;
 
-var htmlparser = require("node-htmlparser/node-htmlparser");
-var sys = require('sys');
+var sys  = require('sys');
 var url  = require('url');
 var http = require('http');
+
+var htmlparser = require("./node-htmlparser");
 
 esi_context.createContext = function (response, proxy_response) {
     return new EsiContext(response, proxy_response);
@@ -33,16 +34,18 @@ function EsiContext (response, proxy_response) {
 	    for (i in includes) {
 		var include = includes[i];
 
-		// init the string we'll receive this subrequest response into
-		var subreq = new EsiSubrequest( include.start, include.end );
-		subreqs.push(subreq);
-		
 		// compose a request from the esi:include tag
-		sys.debug("requesting: " + include.attribs['src']);
+		sys.debug("ESI subrequest: " + include.attribs['src']);
+
 		var src = url.parse(include.attribs['src']);
-		var client = http.createClient(80, src.host);
+		var client = http.createClient(src.port, src.hostname);
 		var request = client.request('GET', src.pathname,
-					     {'host': src.host});
+					     {'host': src.hostname});
+
+		// init the string we'll receive this subrequest response into
+		var subreq = new EsiSubrequest( include.start, include.end, include.attribs['src'] );
+		subreqs.push(subreq);
+
 		request.end();
 
 		context.setup_response(request, subreq);
@@ -63,14 +66,38 @@ function EsiContext (response, proxy_response) {
 EsiContext.prototype.setup_response = function (request, subreq) {
     var our_subreq = subreq;
     var context = this;
+
+    // set up a timeout for this subrequest
+    setTimeout(function () {
+	our_subreq.addChunk('<div class="subreq" id="' + our_subreq.url + "\"><p>failed to load, trying again...</p></div>\n");
+	context.subreqs_outstanding--;
+	context.subreq_completed();
+	request.removeAllListeners('response');
+	request.removeAllListeners('data');
+	request.removeAllListeners('end');
+    }, 2500); // XXX 2.5s per subreq
+
     request.addListener('response', function (response) {
-	response.addListener('data', function (chunk) {
-	    our_subreq.addChunk(chunk);
-	});
-	response.addListener('end', function () {
+	// choose between inlining this response, or inlining our
+	// "try-again" client-side js.
+	if (response.statusCode >= 400) {
+
+	    // client-side try-again 
+	    our_subreq.addChunk('<div class="subreq" id="' + our_subreq.url + "\"><p>failed to load, trying again...</p></div>\n");
 	    context.subreqs_outstanding--;
 	    context.subreq_completed();
-	});
+	}
+	else {
+
+	    // worked, inline this response
+	    response.addListener('data', function (chunk) {
+		our_subreq.addChunk(chunk);
+	    });
+	    response.addListener('end', function () {
+		context.subreqs_outstanding--;
+		context.subreq_completed();
+	    });
+	}
     });
 };
 
@@ -126,10 +153,11 @@ EsiContext.prototype.subreq_completed = function () {
 
 // --- EsiSubrequest 
 
-function EsiSubrequest (start, end) {
+function EsiSubrequest (start, end, url) {
     this.start = start;
     this.end = end;
     this.replacement = "";
+    this.url = url;
 }
 
 EsiSubrequest.prototype.addChunk = function (chunk) {
