@@ -242,7 +242,8 @@ EsiContext.prototype.subreq_completed = function () {
 
 // --- EsiSubrequest 
 
-function EsiSubrequest (start, end, url) {
+function EsiSubrequest (context, start, end, url) {
+    this.context = context;
     this.start = start;
     this.end = end;
     this.replacement = "";
@@ -253,6 +254,11 @@ EsiSubrequest.prototype.addChunk = function (chunk) {
     this.replacement += chunk;
 };
 
+EsiSubrequest.prototype.complete = function () {
+    this.context.subreqs_outstanding--;
+    this.context.subreq_completed();
+}
+
 // --- EsiInclude
 
 function EsiInclude (context, start, end, src) {
@@ -262,15 +268,15 @@ function EsiInclude (context, start, end, src) {
 				 {'host': srcurl.hostname});
     request.end();
 
-    this.subreq = new EsiSubrequest( start, end, src );
-    this.setup_response(context, request, this.subreq);
+    this.subreq = new EsiSubrequest(context, start, end, src);
+    this.setup_response(request, this.subreq);
 }
 
 EsiInclude.prototype.subrequest = function () {
     return this.subreq;
 };
 
-EsiInclude.prototype.setup_response = function (context, request, subreq) {
+EsiInclude.prototype.setup_response = function (request, subreq) {
 
     // set up a timeout for this subrequest
     var timeout = 500;
@@ -279,8 +285,7 @@ EsiInclude.prototype.setup_response = function (context, request, subreq) {
 			    "\"><p>failed to load after " + timeout + 
 			    "ms, trying again...<img src=\"/_esi/spinner.gif\"></p></div>\n"
 			   );
-	context.subreqs_outstanding--;
-	context.subreq_completed();
+	subreq.complete();
 	request.removeAllListeners('response');
 	request.removeAllListeners('data');
 	request.removeAllListeners('end');
@@ -293,8 +298,7 @@ EsiInclude.prototype.setup_response = function (context, request, subreq) {
 	    subreq.addChunk('<div class="subreq" id="' + subreq.url + 
 				"\"><p>failed to load after error, trying again...</p></div>\n"
 			       );
-	    context.subreqs_outstanding--;
-	    context.subreq_completed();
+	    subreq.complete();
 	}
 	else {
 
@@ -303,8 +307,7 @@ EsiInclude.prototype.setup_response = function (context, request, subreq) {
 		subreq.addChunk(chunk);
 	    });
 	    response.addListener('end', function () {
-		context.subreqs_outstanding--;
-		context.subreq_completed();
+		subreq.complete();
 	    });
 	}
     });
