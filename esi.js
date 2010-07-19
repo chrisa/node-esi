@@ -99,89 +99,7 @@ function EsiContext (response, proxy_response) {
     this.subreqs_outstanding = 0;
     this.main_req = "";
     this.response_sent = false;
-    
-    // make these available to the Handler callback
-    var subreqs = this.subreqs;
-    var context = this;
-    
-    var handler = new htmlparser.DefaultHandler(function(err, dom) {
-	if (err) {
-	    sys.debug("Error: " + err);
-	}
-	else {
-	    // on getting here, we've received the entire main
-	    // document, and should fire off the esi sub-requests
-	    var includes = htmlparser.DomUtils.getElements({ tag_name: "esi:include" }, dom)
-	    for (i in includes) {
-		var include = includes[i];
-
-		// compose a request from the esi:include tag
-		sys.debug("ESI subrequest: " + include.attribs['src']);
-		var src = url.parse(include.attribs['src']);
-		var client = http.createClient(src.port, src.hostname);
-		var request = client.request('GET', src.pathname,
-					     {'host': src.hostname});
-
-		var subreq = new EsiSubrequest( include.start, include.end, include.attribs['src'] );
-		subreqs.push(subreq);
-
-		request.end();
-
-		context.setup_response(request, subreq);
-		context.subreqs_outstanding++;
- 	    }
-	    context.all_subreqs_started = true;
-
-	    // hack - handle "no subrequests" case
-	    context.subreq_completed();
-
-	}
-    }, { enforceEmptyTags: true });
-
-    this.parser = new htmlparser.Parser(handler);
 }
-
-// this is here to let the listeners close over the right subreq.
-EsiContext.prototype.setup_response = function (request, subreq) {
-    var context = this;
-
-    // set up a timeout for this subrequest
-    var timeout = 500;
-    setTimeout(function () {
-	subreq.addChunk('<div class="subreq" id="' + subreq.url + 
-			    "\"><p>failed to load after " + timeout + 
-			    "ms, trying again...<img src=\"/_esi/spinner.gif\"></p></div>\n"
-			   );
-	context.subreqs_outstanding--;
-	context.subreq_completed();
-	request.removeAllListeners('response');
-	request.removeAllListeners('data');
-	request.removeAllListeners('end');
-    }, 500);
-
-    request.addListener('response', function (response) {
-	if (response.statusCode >= 400) {
-
-	    // client-side try-again 
-	    subreq.addChunk('<div class="subreq" id="' + subreq.url + 
-				"\"><p>failed to load after error, trying again...</p></div>\n"
-			       );
-	    context.subreqs_outstanding--;
-	    context.subreq_completed();
-	}
-	else {
-
-	    // worked, inline this response
-	    response.addListener('data', function (chunk) {
-		subreq.addChunk(chunk);
-	    });
-	    response.addListener('end', function () {
-		context.subreqs_outstanding--;
-		context.subreq_completed();
-	    });
-	}
-    });
-};
 
 EsiContext.prototype.chunk = function (chunk) {
     this.main_req += chunk;
@@ -193,29 +111,83 @@ EsiContext.prototype.end = function () {
 
     // strip out <!--esi --> comments
     var start = 0;
-    var c;
+    var pos;
     var str;
-    while (c = this.main_req.indexOf('<!--esi', start)) {
-	if (c < 0)
+    while (pos = this.main_req.indexOf('<!--esi', start)) {
+	if (pos < 0)
 	    break;
 	
-	str = this.main_req.substr(start, (c - start));
-	stripped_req += str;
-	this.parser.parseChunk(str);
+	stripped_req += this.main_req.substr(start, (pos - start));
 
-	var end = this.main_req.indexOf('-->', c);
-	str = this.main_req.substr(c + 8, end - (c + 8));
-	stripped_req += str;
-	this.parser.parseChunk(str);
+	var end = this.main_req.indexOf('-->', pos);
+	stripped_req += this.main_req.substr(pos + 8, end - (pos + 8));
 
 	start = end + 4;
     }
     str = this.main_req.substr(start);
     stripped_req += str;
-    this.parser.parseChunk(str);
-
     this.main_req = stripped_req;
-    this.parser.done();
+
+    start = 0;
+    while (pos = stripped_req.indexOf('<esi:', start)) {
+	if (pos < 0)
+	    break;
+	
+	var tag = this.parse_tag_at(pos);
+	start = tag.end;
+
+	if (tag.tag == 'esi:include') {
+	    var handler = new EsiInclude( this, tag.start, tag.end, tag.attribs['src'] );
+	}
+	// else if (tag == ...
+	
+	this.subreqs.push(handler.subrequest());
+	this.subreqs_outstanding++;
+    }
+    this.all_subreqs_started = true;
+    
+    // hack - handle "no subrequests" case
+    this.subreq_completed();
+};
+
+EsiContext.prototype.parse_tag_at = function (pos) {
+    // node-htmlparser's regexps
+    var attrib_regex = /([^=<>\"\'\s]+)\s*=\s*"([^"]*)"|([^=<>\"\'\s]+)\s*=\s*'([^']*)'|([^=<>\"\'\s]+)\s*=\s*([^'"\s]+)|([^=<>\"\'\s\/]+)/g;
+    var tag_regex = /^\s*(\/?)\s*([^\s\/]+)/;
+
+    var end = this.main_req.indexOf('>', pos);
+    
+    var element = this.main_req.substr(pos + 1, (end - (pos + 1)));
+    var match = tag_regex.exec(element);
+    if (match) {
+	var tag = match[0];
+    }
+    var attrib_raw = this.main_req.substr((pos + tag.length + 1), (end - (pos + tag.length)));
+    
+    var attribs = {};
+    var match;
+    
+    attrib_regex.lastIndex = 0;
+    while (match = attrib_regex.exec(attrib_raw)) {
+	if (typeof match[1] == "string" && match[1].length) {
+	    attribs[match[1]] = match[2];
+	} else if (typeof match[3] == "string" && match[3].length) {
+	    attribs[match[3].toString()] = match[4].toString();
+	} else if (typeof match[5] == "string" && match[5].length) {
+	    attribs[match[5]] = match[6];
+	} else if (typeof match[7] == "string" && match[7].length) {
+	    attribs[match[7]] = match[7];
+	}
+    }
+    
+    var data = {
+	tag: tag,
+	start: pos + 1,
+	end: end,
+	attribs: attribs
+    };
+
+    return data;
 };
 
 EsiContext.prototype.subreq_completed = function () {
@@ -279,4 +251,61 @@ function EsiSubrequest (start, end, url) {
 
 EsiSubrequest.prototype.addChunk = function (chunk) {
     this.replacement += chunk;
+};
+
+// --- EsiInclude
+
+function EsiInclude (context, start, end, src) {
+    var srcurl = url.parse(src);
+    var client = http.createClient(srcurl.port, srcurl.hostname);
+    var request = client.request('GET', srcurl.pathname,
+				 {'host': srcurl.hostname});
+    request.end();
+
+    this.subreq = new EsiSubrequest( start, end, src );
+    this.setup_response(context, request, this.subreq);
+}
+
+EsiInclude.prototype.subrequest = function () {
+    return this.subreq;
+};
+
+EsiInclude.prototype.setup_response = function (context, request, subreq) {
+
+    // set up a timeout for this subrequest
+    var timeout = 500;
+    setTimeout(function () {
+	subreq.addChunk('<div class="subreq" id="' + subreq.url + 
+			    "\"><p>failed to load after " + timeout + 
+			    "ms, trying again...<img src=\"/_esi/spinner.gif\"></p></div>\n"
+			   );
+	context.subreqs_outstanding--;
+	context.subreq_completed();
+	request.removeAllListeners('response');
+	request.removeAllListeners('data');
+	request.removeAllListeners('end');
+    }, 500);
+
+    request.addListener('response', function (response) {
+	if (response.statusCode >= 400) {
+
+	    // client-side try-again 
+	    subreq.addChunk('<div class="subreq" id="' + subreq.url + 
+				"\"><p>failed to load after error, trying again...</p></div>\n"
+			       );
+	    context.subreqs_outstanding--;
+	    context.subreq_completed();
+	}
+	else {
+
+	    // worked, inline this response
+	    response.addListener('data', function (chunk) {
+		subreq.addChunk(chunk);
+	    });
+	    response.addListener('end', function () {
+		context.subreqs_outstanding--;
+		context.subreq_completed();
+	    });
+	}
+    });
 };
