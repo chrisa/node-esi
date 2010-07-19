@@ -271,6 +271,7 @@ function Parser (handler) {
 						if (this._elements.length && this._elements[this._elements.length - 1].type == ElementType.Comment) {
 							var prevElement = this._elements[this._elements.length - 1];
 							prevElement.raw = prevElement.data = (prevElement.raw + element.raw).replace(Parser._reTrimComment, "");
+						        prevElement.end = prevElement.end + prevElement.raw.length + rawLen; // adjust end to include additional data
 							element.raw = element.data = ""; //This causes the current element to not be added to the element list
 							element.type = ElementType.Text;
 						}
