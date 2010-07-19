@@ -103,7 +103,7 @@ function EsiContext (response, proxy_response) {
     // make these available to the Handler callback
     var subreqs = this.subreqs;
     var context = this;
-
+    
     var handler = new htmlparser.DefaultHandler(function(err, dom) {
 	if (err) {
 	    sys.debug("Error: " + err);
@@ -111,7 +111,6 @@ function EsiContext (response, proxy_response) {
 	else {
 	    // on getting here, we've received the entire main
 	    // document, and should fire off the esi sub-requests
-	    
 	    var includes = htmlparser.DomUtils.getElements({ tag_name: "esi:include" }, dom)
 	    for (i in includes) {
 		var include = includes[i];
@@ -123,7 +122,6 @@ function EsiContext (response, proxy_response) {
 		var request = client.request('GET', src.pathname,
 					     {'host': src.hostname});
 
-		// init the string we'll receive this subrequest response into
 		var subreq = new EsiSubrequest( include.start, include.end, include.attribs['src'] );
 		subreqs.push(subreq);
 
@@ -145,13 +143,15 @@ function EsiContext (response, proxy_response) {
 
 // this is here to let the listeners close over the right subreq.
 EsiContext.prototype.setup_response = function (request, subreq) {
-    var our_subreq = subreq;
     var context = this;
 
     // set up a timeout for this subrequest
     var timeout = 500;
     setTimeout(function () {
-	our_subreq.addChunk('<div class="subreq" id="' + our_subreq.url + "\"><p>failed to load after " + timeout + "ms, trying again...<img src=\"/_esi/spinner.gif\"></p></div>\n");
+	subreq.addChunk('<div class="subreq" id="' + subreq.url + 
+			    "\"><p>failed to load after " + timeout + 
+			    "ms, trying again...<img src=\"/_esi/spinner.gif\"></p></div>\n"
+			   );
 	context.subreqs_outstanding--;
 	context.subreq_completed();
 	request.removeAllListeners('response');
@@ -160,12 +160,12 @@ EsiContext.prototype.setup_response = function (request, subreq) {
     }, 500);
 
     request.addListener('response', function (response) {
-	// choose between inlining this response, or inlining our
-	// "try-again" client-side js.
 	if (response.statusCode >= 400) {
 
 	    // client-side try-again 
-	    our_subreq.addChunk('<div class="subreq" id="' + our_subreq.url + "\"><p>failed to load after error, trying again...</p></div>\n");
+	    subreq.addChunk('<div class="subreq" id="' + subreq.url + 
+				"\"><p>failed to load after error, trying again...</p></div>\n"
+			       );
 	    context.subreqs_outstanding--;
 	    context.subreq_completed();
 	}
@@ -173,7 +173,7 @@ EsiContext.prototype.setup_response = function (request, subreq) {
 
 	    // worked, inline this response
 	    response.addListener('data', function (chunk) {
-		our_subreq.addChunk(chunk);
+		subreq.addChunk(chunk);
 	    });
 	    response.addListener('end', function () {
 		context.subreqs_outstanding--;
@@ -184,13 +184,37 @@ EsiContext.prototype.setup_response = function (request, subreq) {
 };
 
 EsiContext.prototype.chunk = function (chunk) {
-    // received a chunk of main request data - pass to parser
-    this.parser.parseChunk(chunk);
     this.main_req += chunk;
 };
 
 EsiContext.prototype.end = function () {
     // main request is done - parse and start esi processing
+    var stripped_req = "";
+
+    // strip out <!--esi --> comments
+    var start = 0;
+    var c;
+    var str;
+    while (c = this.main_req.indexOf('<!--esi', start)) {
+	if (c < 0)
+	    break;
+	
+	str = this.main_req.substr(start, (c - start));
+	stripped_req += str;
+	this.parser.parseChunk(str);
+
+	var end = this.main_req.indexOf('-->', c);
+	str = this.main_req.substr(c + 8, end - (c + 8));
+	stripped_req += str;
+	this.parser.parseChunk(str);
+
+	start = end + 4;
+    }
+    str = this.main_req.substr(start);
+    stripped_req += str;
+    this.parser.parseChunk(str);
+
+    this.main_req = stripped_req;
     this.parser.done();
 };
 
