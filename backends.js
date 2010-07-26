@@ -1,5 +1,11 @@
+var connect = require('./connect');
 var http = require('http');
 var sys  = require('sys');
+var fs   = require('fs');
+
+var main = connect.createServer(
+    connect.staticProvider(__dirname + '/public')
+);
 
 function server1_cb(request, response) {
     var path = request.url.replace('/_esi/', "");
@@ -34,6 +40,7 @@ function server3_cb(request, response) {
 
 }
 
+main.listen(8080);
 http.createServer(server1_cb).listen(8081);
 http.createServer(server2_cb).listen(8082);
 http.createServer(server3_cb).listen(8083);
