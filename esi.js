@@ -2,7 +2,6 @@ var http = require('http');
 var sys  = require('sys');
 var fs   = require('fs');
 var url  = require('url');
-var htmlparser = require("./node-htmlparser");
 
 function server_cb(request, response) {
     

@@ -1,4 +1,4 @@
 Basic ESI processor in node.js. Copyright 2010, Chris Andrews <chris@nodnol.org>.
 
-Includes node-htmlparser.js, from http://github.com/tautologistics/node-htmlparser
-which is Copyright 2010, Chris Winberry <chris@winberry.net>
+Includes "Connect", from http://github.com/senchalabs/connect, which is
+Copyright (c) 2010 Sencha Inc.
